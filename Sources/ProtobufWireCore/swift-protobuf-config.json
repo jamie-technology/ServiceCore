@@ -1,0 +1,11 @@
+{
+  "invocations": [
+    {
+      "protoFiles": [
+        "Protos/error.proto"
+      ],
+      "visibility": "public",
+      "useAccessLevelOnImports": true
+    }
+  ]
+}

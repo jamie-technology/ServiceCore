@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+// The error body every ServiceCore service sends on failure.
+//
+// Fields 1-4 match `ideatum.v1.ErrorDetail` and `automatio_wire.ErrorDetail`
+// exactly, so existing clients decode these bodies unchanged.
+package servicecore.wire.v1;
+
+// Generated Swift types are `WireErrorCode` and `WireErrorDetail`.
+option swift_prefix = "Wire";
+
+// The standard error categories. Every client can act on these without knowing
+// anything about the service that sent them.
+//
+// Numbering follows `ideatum.v1.ErrorCode`. Services refine a category with
+// their own codes through `ErrorDetail.domain` and `ErrorDetail.reason`; they
+// never add values here.
+enum ErrorCode {
+    ERROR_CODE_UNSPECIFIED = 0;
+    ERROR_CODE_INVALID_ARGUMENT = 1;
+    ERROR_CODE_UNAUTHENTICATED = 2;
+    ERROR_CODE_PERMISSION_DENIED = 3;
+    ERROR_CODE_NOT_FOUND = 4;
+    ERROR_CODE_ALREADY_EXISTS = 5;
+    // A compare-and-set lost. The caller read a stale value and must re-read
+    // and rebase; retrying blindly would lose again. `metadata` may carry
+    // `expected` and `actual`.
+    ERROR_CODE_CONFLICT = 6;
+    // The request was well-formed but the system is not in a state that allows
+    // it.
+    ERROR_CODE_PRECONDITION_FAILED = 7;
+    ERROR_CODE_RESOURCE_EXHAUSTED = 8;
+    ERROR_CODE_CANCELLED = 9;
+    ERROR_CODE_UNAVAILABLE = 10;
+    ERROR_CODE_INTERNAL = 11;
+    ERROR_CODE_UNIMPLEMENTED = 12;
+    // A lease expired before it was used.
+    ERROR_CODE_LEASE_EXPIRED = 13;
+}
+
+message ErrorDetail {
+    // The standard category. Always set, so a client that does not know
+    // `domain` can still act on the error.
+    ErrorCode code = 1;
+    // For a human. Never parse it.
+    string message = 2;
+    // Whether trying the same request again, unchanged, could succeed.
+    bool retryable = 3;
+    map<string, string> metadata = 4;
+    // The service-specific code set `reason` belongs to, e.g. "aegis.v1".
+    // Empty when the error is only a standard category.
+    string domain = 5;
+    // The service-specific code within `domain`. Meaningless without it.
+    int32 reason = 6;
+}

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package servicecore.auth.v1;
+
+option swift_prefix = "AuthDb";
+
+// AuthenticationCore's SessionRecord, as a Record Layer record.
+message Session {
+  // The session's UUID. The primary key.
+  string id = 1;
+
+  // Hex SHA-256 of the session's current access token. Indexed: requests find
+  // their session by it.
+  string token_digest = 2;
+
+  // accounts' access_token_generation of the current access token.
+  uint64 generation = 3;
+
+  string refresh_token = 4;
+  string subject = 5;
+  repeated string scopes = 6;
+
+  // Unix milliseconds.
+  uint64 signed_in_at = 7;
+
+  // Unix seconds. Indexed, for sweeping expired sessions.
+  int64 expires_at = 8;
+}
