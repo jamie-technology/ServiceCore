@@ -135,6 +135,10 @@ In a handler:
 - **Fail:** throw. `StandardError.notFound(…)`, your own `ServiceError(code, …)`, anything. `useProtobufErrors` turns every error into an `ErrorDetail` body (mapping below).
 - **Authenticate:** add `@AuthMiddleware(AuthenticatedAccount.self, using: …)` and an `account: AuthenticatedAccount` parameter (see [AuthenticationCore](#a-services-authentication-controller)).
 
+**Call `useProtobufErrors` before adding any other middleware.** It replaces the application's middleware chain, so
+anything added earlier (CORS, say) is silently dropped. Add those after it, `at: .beginning` where they must wrap
+error responses.
+
 **The configuration.** A service sets its `ProtobufWireConfiguration` (request-ID header, `translateError`) once, in `app.useProtobufErrors(configuration:)`. The middleware makes it `ProtobufWireConfiguration.current` for the length of each request, so `Protobuf`, `req.protobuf`, `req.requestID()`, `AuthenticationMiddleware` and every other helper use it without a handler naming it. Outside a request, `.current` is `.default`.
 
 **Limits.** `@Controller` routes can't set a per-route `maxBodySize`, so the application's default applies. Use the closure helper below for a route that takes large bodies. A handler's first parameter must be named `req`, typed `Request`. That's VaporMacros' rule.
