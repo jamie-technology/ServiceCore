@@ -336,6 +336,27 @@ Everywhere else, `AuthenticationMiddleware` and `authenticate(accessToken:)` beh
 (`req.account` works for delegated people too). Tokens for any other API are refused, as is this service's own
 client-credentials token.
 
+### Calling another service's API as the person
+
+To call another service's API (say Groups) *as the signed-in person*, ask for it at sign-in, and get its tokens from
+the session:
+
+```swift
+let url = accounts.authorizationURL(
+    redirectURI: redirectURI, scopes: ["user.read", "groups.read"], state: state,
+    resources: ["https://groups-api.jamie.software"]          // one consent covers this service and Groups
+)
+// later, in a request from that person:
+let groups = try await auth.resourceToken("https://groups-api.jamie.software", forSessionOf: account.accessToken)
+// call Groups with `Authorization: Bearer \(groups.accessToken)`; it applies the person's authority
+```
+
+The service's client must be on the API's allow-list at accounts. Each token is for that one API (RFC 8707: a token
+valid at two APIs could be replayed by one against the other), cached until a minute before it expires. If the API
+refuses one early, call again with `replacing:` it: accounts issues the next generation once, however many callers
+ask. `resourceNotGranted` (403) means the sign-in didn't cover that API or the client was taken off its list;
+`signInRequired` means the grant is gone.
+
 ### Token refresh
 
 When introspection says a token is no longer active and it is its session's current token, the middleware refreshes the session and the request goes ahead as the new token. The response, error responses included, carries the new token in `X-Updated-Access-Token` and its version in `X-Updated-Access-Token-Version`.

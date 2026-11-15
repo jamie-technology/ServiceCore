@@ -111,6 +111,11 @@ public protocol AccountsOAuthClient: Sendable {
     /// Anything older is ``AccountsOAuthError/isStaleGeneration``.
     func refresh(refreshToken: String, expectedGeneration: UInt64) async throws -> TokenGrant
 
+    /// `POST /token` with `grant_type=refresh_token&resource=…`: the grant's access token for another service's API
+    /// (RFC 8707), acting for the person. Without `expectedGeneration`, accounts returns that API's current token while
+    /// it's valid and issues the next once it isn't; with it, it's the usual compare-and-set, for that API's token.
+    func refresh(refreshToken: String, resource: String, expectedGeneration: UInt64?) async throws -> TokenGrant
+
     /// `POST /token` with `grant_type=authorization_code`.
     func exchange(code: String, redirectURI: String?) async throws -> TokenGrant
 }
@@ -150,6 +155,12 @@ public struct HTTPAccountsOAuthClient: AccountsOAuthClient {
             ("grant_type", "refresh_token"), ("refresh_token", refreshToken),
             ("expected_generation", String(expectedGeneration)),
         ])
+    }
+
+    public func refresh(refreshToken: String, resource: String, expectedGeneration: UInt64?) async throws -> TokenGrant {
+        var form = [("grant_type", "refresh_token"), ("refresh_token", refreshToken), ("resource", resource)]
+        if let expectedGeneration { form.append(("expected_generation", String(expectedGeneration))) }
+        return try await grant(form)
     }
 
     public func exchange(code: String, redirectURI: String?) async throws -> TokenGrant {
@@ -248,5 +259,12 @@ enum FormEncoding {
 
     static func escape(_ string: String) -> String {
         string.addingPercentEncoding(withAllowedCharacters: unreserved) ?? string
+    }
+}
+
+extension AccountsOAuthClient {
+    /// For clients written before resource tokens: they can't get them.
+    public func refresh(refreshToken: String, resource: String, expectedGeneration: UInt64?) async throws -> TokenGrant {
+        throw AccountsOAuthError.unavailable("this accounts client can't get tokens for other services' APIs")
     }
 }

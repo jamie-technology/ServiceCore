@@ -20,6 +20,9 @@ public enum AuthenticationErrorCode: Int32, ServiceErrorCode {
     case invalidAuthorizationCode = 4
     case insufficientScope = 5
     case accountsUnavailable = 6
+    /// The person's sign-in doesn't cover that API (they weren't asked for it), or this service's client is no longer
+    /// on its allow-list. Sign them in again asking for it, if it should.
+    case resourceNotGranted = 7
 
     public static let domain = "servicecore.auth"
 
@@ -34,6 +37,7 @@ public enum AuthenticationErrorCode: Int32, ServiceErrorCode {
         case .invalidAuthorizationCode: "invalid_authorization_code"
         case .insufficientScope: "insufficient_scope"
         case .accountsUnavailable: "accounts_unavailable"
+        case .resourceNotGranted: "resource_not_granted"
         }
     }
 
@@ -41,7 +45,7 @@ public enum AuthenticationErrorCode: Int32, ServiceErrorCode {
         switch self {
         case .missingAccessToken, .invalidAccessToken, .signInRequired: .unauthenticated
         case .invalidAuthorizationCode: .invalidArgument
-        case .insufficientScope: .permissionDenied
+        case .insufficientScope, .resourceNotGranted: .permissionDenied
         case .accountsUnavailable: .unavailable
         }
     }
@@ -79,6 +83,10 @@ extension ServiceError where Code == AuthenticationErrorCode {
         var headers = HTTPFields()
         headers[.wwwAuthenticate] = #"Bearer error="insufficient_scope", scope="\#(scope)""#
         return make(.insufficientScope, "needs scope: \(scope)", metadata: ["scope": scope], headers: headers)
+    }
+
+    public static func resourceNotGranted(_ resource: String) -> Self {
+        make(.resourceNotGranted, "the sign-in doesn't cover \(resource)", metadata: ["resource": resource])
     }
 
     public static func accountsUnavailable() -> Self {

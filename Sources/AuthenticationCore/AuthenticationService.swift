@@ -173,6 +173,9 @@ public struct AuthenticationService: Sendable {
     /// `nil` accepts only tokens from this service's own sign-in.
     public let resourceIdentifier: String?
 
+    /// Tokens for other services' APIs, per session and resource, until shortly before they expire.
+    let resourceTokens = ResourceTokenCache()
+
     private let now: @Sendable () -> Date
 
     public init(
@@ -384,7 +387,7 @@ public struct AuthenticationService: Sendable {
         return generation
     }
 
-    private static func unavailable(_ error: AccountsOAuthError) -> AuthenticationError {
+    static func unavailable(_ error: AccountsOAuthError) -> AuthenticationError {
         Logger.current.error("accounts call failed", metadata: ["error": .string(error.description)])
         // A rejection other than invalid_grant (invalid_client, say) is this
         // service's misconfiguration, not the client's problem: also a 503.

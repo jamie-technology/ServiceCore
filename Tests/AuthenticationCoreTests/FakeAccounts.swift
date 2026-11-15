@@ -18,6 +18,9 @@ final class FakeAccounts: AccountsOAuthClient {
         var client = "test"
         /// The API the token is for (RFC 8707), if any.
         var audience: String?
+        /// Other APIs the sign-in covers, and their tokens: (token, generation, expired).
+        var resources: [String] = []
+        var resourceTokens: [String: (token: String, generation: UInt64, expired: Bool)] = [:]
         var generation: UInt64 = 0
         var accessExpired = false
         var revoked = false
@@ -29,6 +32,8 @@ final class FakeAccounts: AccountsOAuthClient {
         var grants: [Grant] = []
         var codes: [String: String] = [:]
         var refreshCalls = 0
+        var resourceRefreshCalls = 0
+        var codeResources: [String: [String]] = [:]
         var tokensIssued = 0
         var failure = Failure.none
         var delay = Duration.zero
@@ -57,6 +62,65 @@ final class FakeAccounts: AccountsOAuthClient {
             ))
         }
         return access
+    }
+
+    /// Signs in (as accounts would at an exchange) covering `resources` too; returns the access token.
+    func issue(subject: String, resources: [String]) -> String {
+        let access = issue(subject: subject)
+        state.withLock { state in
+            if let index = state.grants.firstIndex(where: { $0.accessToken == access }) {
+                state.grants[index].resources = resources
+            }
+        }
+        return access
+    }
+
+    /// Expires a grant's token for `resource`, as an hour passing would.
+    func expireResourceToken(_ token: String) {
+        state.withLock { state in
+            for index in state.grants.indices {
+                for (resource, entry) in state.grants[index].resourceTokens where entry.token == token {
+                    state.grants[index].resourceTokens[resource]?.expired = true
+                }
+            }
+        }
+    }
+
+    /// Calls to the resource refresh, including ones that returned an existing token.
+    var resourceRefreshCalls: Int { state.withLock { $0.resourceRefreshCalls } }
+
+    func refresh(refreshToken: String, resource: String, expectedGeneration: UInt64?) async throws -> TokenGrant {
+        try state.withLock { state in
+            state.resourceRefreshCalls += 1
+            guard let index = state.grants.firstIndex(where: { $0.refreshToken == refreshToken }), !state.grants[index].revoked else {
+                throw AccountsOAuthError.rejected(code: "invalid_grant", description: nil)
+            }
+            guard state.grants[index].resources.contains(resource) else {
+                throw AccountsOAuthError.rejected(code: "invalid_target", description: nil)
+            }
+            let current = state.grants[index].resourceTokens[resource]
+            func issue(_ generation: UInt64) -> (token: String, generation: UInt64, expired: Bool) {
+                let entry = (token: "resource-\(UUID().uuidString)", generation: generation, expired: false)
+                state.grants[index].resourceTokens[resource] = entry
+                return entry
+            }
+            let entry: (token: String, generation: UInt64, expired: Bool)
+            switch (current, expectedGeneration) {
+            case (nil, _): entry = issue(0)
+            case (let current?, nil): entry = current.expired ? issue(current.generation + 1) : current
+            case (let current?, let expected?) where expected == current.generation: entry = issue(current.generation + 1)
+            case (let current?, let expected?) where expected + 1 == current.generation: entry = current
+            default: throw AccountsOAuthError.rejected(code: "stale_generation", description: nil)
+            }
+            return TokenGrant(accessToken: entry.token, expiresIn: 3600, refreshToken: refreshToken, scopes: [], generation: entry.generation)
+        }
+    }
+
+    /// A code whose sign-in also covers `resources` (as `/authorize?…&resource=…` would give).
+    func code(for subject: String, resources: [String]) -> String {
+        let code = code(for: subject)
+        state.withLock { $0.codeResources[code] = resources }
+        return code
     }
 
     func code(for subject: String) -> String {
@@ -141,7 +205,8 @@ final class FakeAccounts: AccountsOAuthClient {
         guard let subject = state.withLock({ $0.codes.removeValue(forKey: code) }) else {
             throw AccountsOAuthError.rejected(code: "invalid_grant", description: nil)
         }
-        let access = issue(subject: subject)
+        let resources = state.withLock { $0.codeResources.removeValue(forKey: code) } ?? []
+        let access = issue(subject: subject, resources: resources)
         let grant = state.withLock { $0.grants.first { $0.accessToken == access }! }
         return TokenGrant(accessToken: access, expiresIn: 3600, refreshToken: grant.refreshToken, scopes: grant.scopes, generation: 0)
     }

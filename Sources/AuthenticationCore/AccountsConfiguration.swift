@@ -72,7 +72,11 @@ public struct AccountsConfiguration: Sendable, Hashable {
     ///   - scopes: The account scopes to ask for, e.g. `["user.read"]`.
     ///   - state: An unguessable value tied to the person's session, checked when
     ///     they come back (CSRF protection).
-    public func authorizationURL(redirectURI: String, scopes: [String], state: String?) -> URL {
+    ///   - resources: Other services' APIs to use as the person afterwards
+    ///     (RFC 8707), by resource identifier. Their scopes go in `scopes` too;
+    ///     the person consents to everything at once. Then get tokens for them
+    ///     with ``AuthenticationService/resourceToken(_:forSessionOf:replacing:)``.
+    public func authorizationURL(redirectURI: String, scopes: [String], state: String?, resources: [String] = []) -> URL {
         var components = URLComponents(
             url: frontendURL.appending(path: "authorize"), resolvingAgainstBaseURL: false
         )!
@@ -82,6 +86,7 @@ public struct AccountsConfiguration: Sendable, Hashable {
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
         ] + (state.map { [URLQueryItem(name: "state", value: $0)] } ?? [])
+            + resources.map { URLQueryItem(name: "resource", value: $0) }
         return components.url!
     }
 }
