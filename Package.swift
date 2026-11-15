@@ -41,7 +41,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
         // FoundationDB swift bindings, with the Record Layer.
         .package(
-            url: "git@github.com:itspolly/fdb-swift-bindings.git",
+            url: "https://github.com/itspolly/fdb-swift-bindings.git",
             branch: "main",
             traits: ["RecordLayer"]
         ),

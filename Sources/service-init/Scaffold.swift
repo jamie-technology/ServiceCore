@@ -95,7 +95,7 @@ struct Scaffold {
             dependencies.append("""
                         // FoundationDB swift bindings.
                         .package(
-                            url: "git@github.com:itspolly/fdb-swift-bindings.git",
+                            url: "https://github.com/itspolly/fdb-swift-bindings.git",
                             branch: "main"\(options.usesRecordLayer ? ",\n            traits: [\"RecordLayer\"]" : "")
                         ),
                 """)
@@ -1281,7 +1281,7 @@ struct Scaffold {
             """
     }
 
-    /// The template's Dockerfile, unchanged apart from the product name.
+    /// The template's Dockerfile, with protoc when the service builds protos.
     private func dockerfile() -> String {
         #"""
         # ================================
@@ -1379,15 +1379,15 @@ struct Scaffold {
         """#
     }
 
-    /// The Accounts service's Dockerfile: the FoundationDB client in both
-    /// stages, and SSH for the private bindings.
+    /// The Accounts service's Dockerfile, with the FoundationDB client in both
+    /// stages. Every dependency is public, so it needs no SSH.
     private func fdbDockerfile() -> String {
         #"""
         # syntax=docker/dockerfile:1.7
         #
-        # \#(name) as a Linux container. Build with an SSH agent, which fetches the private fdb-swift-bindings dependency:
+        # \#(name) as a Linux container:
         #
-        #   docker build --ssh default -t \#(options.name.kebabName) .
+        #   docker build -t \#(options.name.kebabName) .
 
         ARG SWIFT_VERSION=6.4
         ARG FDB_VERSION=7.3.77
@@ -1401,24 +1401,23 @@ struct Scaffold {
         # pkg-config file the bindings' CFoundationDB module looks for (FoundationDB doesn't ship one). protoc is for the
         # SwiftProtobuf build plugin.
         RUN export DEBIAN_FRONTEND=noninteractive \
-            && apt-get update -q && apt-get install -yq --no-install-recommends curl ca-certificates protobuf-compiler openssh-client \
+            && apt-get update -q && apt-get install -yq --no-install-recommends curl ca-certificates protobuf-compiler \
             && arch="$([ "$TARGETARCH" = arm64 ] && echo aarch64 || echo amd64)" \
             && curl -fsSL -o /tmp/fdb-clients.deb "https://github.com/apple/foundationdb/releases/download/${FDB_VERSION}/foundationdb-clients_${FDB_VERSION}-1_${arch}.deb" \
             && apt-get install -yq --no-install-recommends /tmp/fdb-clients.deb && rm /tmp/fdb-clients.deb \
             && mkdir -p /usr/lib/pkgconfig \
             && printf 'prefix=/usr\nincludedir=${prefix}/include\nlibdir=${prefix}/lib\n\nName: CFoundationDB\nDescription: The FoundationDB C client\nVersion: %s\nCflags: -I${includedir}\nLibs: -L${libdir} -lfdb_c\n' "$FDB_VERSION" > /usr/lib/pkgconfig/libfdb.pc \
-            && mkdir -p -m 700 /root/.ssh && ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts \
             && rm -rf /var/lib/apt/lists/*
 
         WORKDIR /build
 
         # Resolve first, so source edits don't refetch dependencies.
         COPY Package.swift Package.resolved ./
-        RUN --mount=type=ssh --mount=type=cache,target=/build/.build swift package resolve
+        RUN --mount=type=cache,target=/build/.build swift package resolve
 
         COPY Sources Sources
         COPY Tests Tests
-        RUN --mount=type=ssh --mount=type=cache,target=/build/.build \
+        RUN --mount=type=cache,target=/build/.build \
             swift build -c release --product \#(name) --static-swift-stdlib \
             && mkdir -p /staging \
             && cp "$(swift build -c release --show-bin-path)/\#(name)" /staging/
@@ -1491,7 +1490,7 @@ struct Scaffold {
             sections.append("""
                 ### ServiceCore
 
-                ServiceCore is a local path dependency, so it is not inside the Docker build context. For container builds, switch `Package.swift` to its git URL.
+                ServiceCore is a local path dependency, for developing it alongside \(name). It is not inside the Docker build context, so switch `Package.swift` back to `\(ServiceInit.defaultServiceCoreURL)` before building a container.
                 """)
         }
 

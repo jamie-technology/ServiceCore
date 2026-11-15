@@ -15,7 +15,7 @@ struct ServiceInit: ParsableCommand {
               service-init Mailroom
               service-init Mailroom --fdb=records --protobuf-wire-library --blob-store
               service-init Mailroom --fdb=records --authentication
-              service-init Mailroom --fdb=kv --service-core-url git@github.com:me/ServiceCore.git
+              service-init Mailroom --fdb=kv --service-core-path ../ServiceCore
             """
     )
 
@@ -47,13 +47,20 @@ struct ServiceInit: ParsableCommand {
         """)
     var authentication = false
 
-    @Option(help: "Depend on ServiceCore by git URL instead of by local path.")
-    var serviceCoreURL: String?
+    /// Where ServiceCore lives. Generated services depend on it by this URL
+    /// unless told otherwise, so they build anywhere, Docker included.
+    static let defaultServiceCoreURL = "https://github.com/jamie-technology/ServiceCore.git"
 
-    @Option(help: "The ServiceCore branch to use with --service-core-url.")
+    @Option(help: "The git URL to depend on ServiceCore by.")
+    var serviceCoreURL = ServiceInit.defaultServiceCoreURL
+
+    @Option(help: "The ServiceCore branch to depend on.")
     var serviceCoreBranch = "main"
 
-    @Option(help: "Depend on ServiceCore at this local path. Defaults to the checkout this tool was built from.")
+    @Option(help: """
+        Depend on a local ServiceCore checkout at this path instead of the git URL, to develop ServiceCore \
+        alongside the service. Not for anything built in Docker.
+        """)
     var serviceCorePath: String?
 
     @Flag(inversion: .prefixedNo, help: "Create a git repository in the new service.")
@@ -68,8 +75,8 @@ struct ServiceInit: ParsableCommand {
                 "'\(name)' is not a usable name: start with a letter and use only letters and digits."
             )
         }
-        if serviceCoreURL != nil, serviceCorePath != nil {
-            throw ValidationError("Pass --service-core-url or --service-core-path, not both.")
+        if serviceCoreURL != Self.defaultServiceCoreURL || serviceCoreBranch != "main", serviceCorePath != nil {
+            throw ValidationError("--service-core-path replaces the git URL: pass it, or --service-core-url/--service-core-branch, not both.")
         }
     }
 
@@ -123,21 +130,11 @@ struct ServiceInit: ParsableCommand {
     }
 
     private func serviceCoreReference(relativeTo directory: URL) -> ServiceCoreReference {
-        if let serviceCoreURL {
+        guard let serviceCorePath else {
             return .url(serviceCoreURL, branch: serviceCoreBranch)
         }
-        let path = serviceCorePath.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? Self.thisCheckout
+        let path = URL(fileURLWithPath: serviceCorePath, isDirectory: true)
         return .path(relativePath(from: directory, to: path.standardizedFileURL))
-    }
-
-    /// The ServiceCore checkout this tool was compiled from: three levels up
-    /// from this file (`Sources/service-init/ServiceInit.swift`).
-    private static var thisCheckout: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
     }
 
     private func runGit(_ arguments: [String], in directory: URL) throws {

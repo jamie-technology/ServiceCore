@@ -29,7 +29,7 @@ Scaffolds a new service. The output is `vapor new <name> --branch vapor5` reprod
 ```bash
 swift run service-init Mailroom                                   # the plain Vapor 5 template
 swift run service-init Mailroom --fdb=records --protobuf-wire-library --blob-store
-swift run service-init Mailroom --fdb=kv -o ../Mailroom --service-core-url git@github.com:me/ServiceCore.git
+swift run service-init Mailroom --fdb=kv -o ../Mailroom --service-core-path ../ServiceCore
 swift run service-init Mailroom --fdb=records --authentication
 ```
 
@@ -41,7 +41,7 @@ swift run service-init Mailroom --fdb=records --authentication
 | `--blob-store` | `BlobStore` from `STORAGE_BLOBS_*` config, `POST /blobs` and `GET /blobs/:digest`, a blobs volume in docker-compose |
 | `--authentication` | sign-in through accounts: `AuthenticationCore`, an `AuthenticationController` (`authorization-url`, `sign-in`, `sign-out`, and an example authenticated `GET /v1/me`), `Authentication.proto` in `WireModels`, the `ACCOUNTS_*` configuration, and tests against a fake accounts. Turns on `--protobuf-wire-library`. Sessions go in `FoundationDBSessionStore` with `--fdb`, otherwise in memory (a warning says so) |
 
-ServiceCore is referenced by path by default: the checkout `service-init` was built from, or `--service-core-path`. Use `--service-core-url` (plus `--service-core-branch`) for anything built in Docker. `--no-git` skips `git init`, and `--force` writes into a non-empty directory.
+Generated services depend on ServiceCore by git URL, `https://github.com/jamie-technology/ServiceCore.git` on `main`, so they build anywhere, Docker included. ServiceCore and the FoundationDB bindings are public, so builds need no credentials. `--service-core-url` and `--service-core-branch` change that. `--service-core-path` uses a local checkout instead, for developing ServiceCore alongside a service. `--no-git` skips `git init`, and `--force` writes into a non-empty directory.
 
 ## FoundationDBCore
 

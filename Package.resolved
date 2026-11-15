@@ -1,5 +1,5 @@
 {
-  "originHash" : "9fbd1995844646a46d93cc1a90dd4a0fc7b7c0c7ace74ca739d3ca22ffb64764",
+  "originHash" : "c74cf403a334dbf6a90ea8de3ff833889e4b8ff5bc1973197a3090c176b4f7ba",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -22,10 +22,10 @@
     {
       "identity" : "fdb-swift-bindings",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:itspolly/fdb-swift-bindings.git",
+      "location" : "https://github.com/itspolly/fdb-swift-bindings.git",
       "state" : {
         "branch" : "main",
-        "revision" : "6a3658eb01474c23a1110949844aeea8ec38904e"
+        "revision" : "ff6a6c0484b47df3811c1268201b56fcc85b2eb2"
       }
     },
     {
