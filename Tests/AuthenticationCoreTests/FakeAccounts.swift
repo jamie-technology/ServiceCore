@@ -11,8 +11,13 @@ final class FakeAccounts: AccountsOAuthClient {
     struct Grant {
         var accessToken: String
         var refreshToken: String
-        var subject: String
+        /// `nil` for a client-credentials token.
+        var subject: String?
         var scopes: [String]
+        /// The client the token was issued to: this service's own (`test`), or another service's.
+        var client = "test"
+        /// The API the token is for (RFC 8707), if any.
+        var audience: String?
         var generation: UInt64 = 0
         var accessExpired = false
         var revoked = false
@@ -37,6 +42,19 @@ final class FakeAccounts: AccountsOAuthClient {
         let access = "access-\(UUID().uuidString)"
         state.withLock {
             $0.grants.append(Grant(accessToken: access, refreshToken: "refresh-\(UUID().uuidString)", subject: subject, scopes: scopes))
+        }
+        return access
+    }
+
+    /// A token another service's client got for an API (RFC 8707): as a person
+    /// (`subject`) or as itself (`subject: nil`).
+    func issueForAPI(_ audience: String, client: String, subject: String?, scopes: [String]) -> String {
+        let access = "access-\(UUID().uuidString)"
+        state.withLock {
+            $0.grants.append(Grant(
+                accessToken: access, refreshToken: "refresh-\(UUID().uuidString)", subject: subject, scopes: scopes,
+                client: client, audience: audience
+            ))
         }
         return access
     }
@@ -79,8 +97,8 @@ final class FakeAccounts: AccountsOAuthClient {
             guard let grant = state.grants.first(where: { $0.accessToken == accessToken }),
                   !grant.accessExpired, !grant.revoked else { return .inactive }
             return TokenIntrospection(
-                active: true, subject: grant.subject, scopes: grant.scopes, clientIdentifier: "test",
-                generation: grant.generation
+                active: true, subject: grant.subject, scopes: grant.scopes, clientIdentifier: grant.client,
+                generation: grant.generation, audience: grant.audience
             )
         }
     }

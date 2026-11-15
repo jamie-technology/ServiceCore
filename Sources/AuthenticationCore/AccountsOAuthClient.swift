@@ -4,11 +4,12 @@ public import Vapor
 
 /// What accounts says about an access token (RFC 7662).
 public struct TokenIntrospection: Sendable, Hashable {
-    /// `false` for an expired, revoked or unknown token, or one issued to a
-    /// different client. Accounts does not say which.
+    /// `false` for an expired, revoked or unknown token, or one that is neither
+    /// issued to this service's client nor for its API. Accounts does not say which.
     public var active: Bool
 
-    /// The account's identifier. `nil` for a service's own client-credentials token.
+    /// The account's identifier. `nil` for a client-credentials token: this
+    /// service's own, or another service's for this service's API.
     public var subject: String?
 
     public var scopes: [String]
@@ -18,9 +19,14 @@ public struct TokenIntrospection: Sendable, Hashable {
     /// Which access token this is under its grant (`access_token_generation`).
     public var generation: UInt64?
 
+    /// The resource identifier of the API the token is for (`aud`, RFC 8707),
+    /// when another service's client got it for this service's API rather than
+    /// it being issued to this service's own client.
+    public var audience: String?
+
     public init(
         active: Bool, subject: String? = nil, scopes: [String] = [], clientIdentifier: String? = nil,
-        expiresAt: Date? = nil, generation: UInt64? = nil
+        expiresAt: Date? = nil, generation: UInt64? = nil, audience: String? = nil
     ) {
         self.active = active
         self.subject = subject
@@ -28,6 +34,7 @@ public struct TokenIntrospection: Sendable, Hashable {
         self.clientIdentifier = clientIdentifier
         self.expiresAt = expiresAt
         self.generation = generation
+        self.audience = audience
     }
 
     public static let inactive = TokenIntrospection(active: false)
@@ -133,7 +140,8 @@ public struct HTTPAccountsOAuthClient: AccountsOAuthClient {
             scopes: response.scope.map(Self.scopes) ?? [],
             clientIdentifier: response.client_id,
             expiresAt: response.exp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-            generation: response.access_token_generation
+            generation: response.access_token_generation,
+            audience: response.aud
         )
     }
 
@@ -218,6 +226,7 @@ public struct HTTPAccountsOAuthClient: AccountsOAuthClient {
         let exp: Int64?
         let sub: String?
         let access_token_generation: UInt64?
+        let aud: String?
     }
 
     private struct ErrorBody: Decodable {

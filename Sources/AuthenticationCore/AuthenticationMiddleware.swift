@@ -40,6 +40,13 @@ public struct AuthenticationMiddleware: Middleware {
     /// for routes that work either way. A token that is present still has to be valid.
     public var allowsAnonymous: Bool
 
+    /// Lets other services acting as themselves in, with client-credentials
+    /// tokens for this service's API (RFC 8707). Off by default: routes that
+    /// turn it on read `try req.principal`, which says whether a person or a
+    /// service is calling. People are let in either way, and also logged in
+    /// as an ``AuthenticatedAccount`` (`try req.account`).
+    public var acceptsServices: Bool
+
 
     /// Turns an error from further down into a response, when this middleware
     /// has to (see above). Defaults to a protobuf `ErrorDetail`.
@@ -49,12 +56,14 @@ public struct AuthenticationMiddleware: Middleware {
         service: AuthenticationService,
         requiredScopes: Set<String> = [],
         allowsAnonymous: Bool = false,
+        acceptsServices: Bool = false,
         protobufConfiguration: ProtobufWireConfiguration? = nil,
         renderError: (@Sendable (any Error, Request) async -> Response)? = nil
     ) {
         self.service = service
         self.requiredScopes = requiredScopes
         self.allowsAnonymous = allowsAnonymous
+        self.acceptsServices = acceptsServices
         self.renderError = renderError ?? { error, request in
             let configuration = protobufConfiguration ?? .current
             return ProtobufResponse.failure(
@@ -71,18 +80,21 @@ public struct AuthenticationMiddleware: Middleware {
             throw AuthenticationError.missingAccessToken()
         }
 
-        let authentication = try await service.authenticate(accessToken: token)
+        let authentication = try await service.authenticatePrincipal(accessToken: token)
+        if case .service = authentication.principal, !acceptsServices {
+            throw AuthenticationError.invalidAccessToken()
+        }
         guard let updated = authentication.updated else {
-            try checkScopes(authentication.account)
-            request.auth.login(authentication.account)
+            try checkScopes(authentication.principal)
+            login(authentication.principal, on: request)
             return try await next.respond(to: request)
         }
 
         // From here on every outcome is a response carrying the new token.
         var response: Response
         do {
-            try checkScopes(authentication.account)
-            request.auth.login(authentication.account)
+            try checkScopes(authentication.principal)
+            login(authentication.principal, on: request)
             response = try await next.respond(to: request)
         } catch {
             response = await renderError(error, request)
@@ -93,9 +105,16 @@ public struct AuthenticationMiddleware: Middleware {
         return response
     }
 
-    private func checkScopes(_ account: AuthenticatedAccount) throws {
-        let missing = requiredScopes.subtracting(account.scopes)
+    private func checkScopes(_ principal: AuthenticatedPrincipal) throws {
+        let missing = requiredScopes.subtracting(principal.scopes)
         guard missing.isEmpty else { throw AuthenticationError.insufficientScope(missing.sorted()) }
+    }
+
+    private func login(_ principal: AuthenticatedPrincipal, on request: Request) {
+        request.auth.login(principal)
+        if case .account(let account) = principal {
+            request.auth.login(account)
+        }
     }
 }
 
@@ -108,6 +127,20 @@ extension Request {
                 throw AuthenticationError.missingAccessToken()
             }
             return account
+        }
+    }
+}
+
+extension Request {
+    /// Whoever the request is authenticated as: a person (signed in to this
+    /// service, or through another service's client) or, on routes that
+    /// ``AuthenticationMiddleware/acceptsServices``, a service acting as itself.
+    public var principal: AuthenticatedPrincipal {
+        get throws {
+            guard let principal = auth.get(AuthenticatedPrincipal.self) else {
+                throw AuthenticationError.missingAccessToken()
+            }
+            return principal
         }
     }
 }

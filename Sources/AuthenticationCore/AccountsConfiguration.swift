@@ -19,11 +19,17 @@ public struct AccountsConfiguration: Sendable, Hashable {
     /// Accounts' API, which serves `/token` and `/introspect`.
     public var apiURL: URL
 
-    public init(clientIdentifier: String, clientSecret: String, frontendURL: URL, apiURL: URL) {
+    /// This service's own API's resource identifier, as registered at accounts
+    /// (Services → API), if other services call it (RFC 8707). Their tokens for
+    /// it are accepted; see ``AuthenticationService/authenticatePrincipal(accessToken:)``.
+    public var resourceIdentifier: String?
+
+    public init(clientIdentifier: String, clientSecret: String, frontendURL: URL, apiURL: URL, resourceIdentifier: String? = nil) {
         self.clientIdentifier = clientIdentifier
         self.clientSecret = clientSecret
         self.frontendURL = frontendURL
         self.apiURL = apiURL
+        self.resourceIdentifier = resourceIdentifier
     }
 
     /// Reads, from `config`:
@@ -34,6 +40,7 @@ public struct AccountsConfiguration: Sendable, Hashable {
     /// | `accounts.client.secret` (secret) | `ACCOUNTS_CLIENT_SECRET` |
     /// | `accounts.frontend.url` | `ACCOUNTS_FRONTEND_URL` |
     /// | `accounts.api.url` | `ACCOUNTS_API_URL` |
+    /// | `accounts.resource.identifier` (optional) | `ACCOUNTS_RESOURCE_IDENTIFIER` |
     ///
     /// - Parameter scope: The key prefix, if not `accounts`.
     public init(config: ConfigReader, scope: String = "accounts") throws {
@@ -42,7 +49,8 @@ public struct AccountsConfiguration: Sendable, Hashable {
             clientIdentifier: try reader.requiredString(forKey: "client.identifier"),
             clientSecret: try reader.requiredString(forKey: "client.secret", isSecret: true),
             frontendURL: try Self.url(reader, "frontend.url", scope: scope),
-            apiURL: try Self.url(reader, "api.url", scope: scope)
+            apiURL: try Self.url(reader, "api.url", scope: scope),
+            resourceIdentifier: reader.string(forKey: "resource.identifier")
         )
     }
 

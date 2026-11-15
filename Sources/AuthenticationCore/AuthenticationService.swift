@@ -18,10 +18,58 @@ public struct AuthenticatedAccount: Authenticatable, Hashable, Identifiable {
     /// the refreshed one that replaced it.
     public var accessToken: String
 
-    public init(subject: String, scopes: Set<String>, accessToken: String) {
+    /// The OAuth client acting for the person, when it's another service with a
+    /// token for this service's API (RFC 8707). `nil` when the person signed in
+    /// to this service itself. Record it alongside the person (in audit logs,
+    /// say): the person is who acts, the client is how.
+    public var client: String?
+
+    public init(subject: String, scopes: Set<String>, accessToken: String, client: String? = nil) {
         self.subject = subject
         self.scopes = scopes
         self.accessToken = accessToken
+        self.client = client
+    }
+}
+
+/// Another service acting as itself, with a client-credentials token for this
+/// service's API (RFC 8707): `try req.principal`, on routes that accept
+/// services.
+public struct AuthenticatedService: Hashable, Sendable {
+    /// The service's OAuth client identifier at accounts.
+    public var clientIdentifier: String
+    public var scopes: Set<String>
+    public var accessToken: String
+
+    public init(clientIdentifier: String, scopes: Set<String>, accessToken: String) {
+        self.clientIdentifier = clientIdentifier
+        self.scopes = scopes
+        self.accessToken = accessToken
+    }
+}
+
+/// Whoever a request is authenticated as. A service's identity is never the
+/// person's: a person acting through another service is still an
+/// ``account(_:)`` (with its ``AuthenticatedAccount/client``), and only a
+/// service acting as itself is a ``service(_:)``.
+public enum AuthenticatedPrincipal: Authenticatable, Hashable, Sendable {
+    case account(AuthenticatedAccount)
+    case service(AuthenticatedService)
+
+    /// `account:<id>` or `service:<client identifier>`: one namespace for both, so
+    /// a service can never be mistaken for a person (or the other way round).
+    public var subject: String {
+        switch self {
+        case .account(let account): "account:\(account.subject)"
+        case .service(let service): "service:\(service.clientIdentifier)"
+        }
+    }
+
+    public var scopes: Set<String> {
+        switch self {
+        case .account(let account): account.scopes
+        case .service(let service): service.scopes
+        }
     }
 }
 
@@ -38,6 +86,15 @@ public struct Authentication: Sendable, Hashable {
 
     /// Set when the token presented had expired and was refreshed. The client
     /// must store it, unless it already holds a higher version.
+    public var updated: UpdatedAccessToken?
+}
+
+/// A successful authentication that may be a service's (see
+/// ``AuthenticationService/authenticatePrincipal(accessToken:)``).
+public struct PrincipalAuthentication: Sendable, Hashable {
+    public var principal: AuthenticatedPrincipal
+
+    /// Set when this service's own sign-in token had expired and was refreshed.
     public var updated: UpdatedAccessToken?
 }
 
@@ -110,21 +167,30 @@ public struct AuthenticationService: Sendable {
     public let accounts: any AccountsOAuthClient
     public let store: any SessionStore
     public let policy: SessionPolicy
+
+    /// This service's own API's resource identifier at accounts, if it provides
+    /// one (RFC 8707): tokens other services' clients got for it are accepted.
+    /// `nil` accepts only tokens from this service's own sign-in.
+    public let resourceIdentifier: String?
+
     private let now: @Sendable () -> Date
 
     public init(
         accounts: any AccountsOAuthClient,
         store: any SessionStore,
         policy: SessionPolicy = SessionPolicy(),
+        resourceIdentifier: String? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.accounts = accounts
         self.store = store
         self.policy = policy
+        self.resourceIdentifier = resourceIdentifier
         self.now = now
     }
 
-    /// Talks to accounts over HTTP with `client`.
+    /// Talks to accounts over HTTP with `client`. Accepts tokens for
+    /// `configuration.resourceIdentifier`, if set.
     public init(
         configuration: AccountsConfiguration,
         client: any Client,
@@ -133,7 +199,7 @@ public struct AuthenticationService: Sendable {
     ) {
         self.init(
             accounts: HTTPAccountsOAuthClient(configuration: configuration, client: client),
-            store: store, policy: policy
+            store: store, policy: policy, resourceIdentifier: configuration.resourceIdentifier
         )
     }
 
@@ -196,18 +262,57 @@ public struct AuthenticationService: Sendable {
     ///   unknown or already replaced, `signInRequired` when accounts refuses to
     ///   refresh the session, `accountsUnavailable` when it cannot be asked.
     public func authenticate(accessToken: String) async throws -> Authentication {
-        guard !accessToken.isEmpty else { throw AuthenticationError.missingAccessToken() }
-
-        let introspection = try await introspect(accessToken)
-        if introspection.active {
-            // Only accounts' tokens for this client are ever active, so the only
-            // subject-less ones are this service's own client-credentials tokens.
-            guard let subject = introspection.subject else { throw AuthenticationError.invalidAccessToken() }
-            return Authentication(account: AuthenticatedAccount(
-                subject: subject, scopes: Set(introspection.scopes), accessToken: accessToken
-            ))
+        let authentication = try await authenticatePrincipal(accessToken: accessToken)
+        // Services acting as themselves only get in where a route asks for them.
+        guard case .account(let account) = authentication.principal else {
+            throw AuthenticationError.invalidAccessToken()
         }
-        return try await refresh(accessToken)
+        return Authentication(account: account, updated: authentication.updated)
+    }
+
+    /// Authenticates a request's access token as a person or a service, refreshing
+    /// it first if it's this service's own sign-in token and has expired.
+    ///
+    /// Accounts only says a token is active to the client it was issued to, or to
+    /// the service whose API it's for. So an active token is one of:
+    ///
+    /// | Token | Principal |
+    /// |---|---|
+    /// | from this service's own sign-in | ``AuthenticatedPrincipal/account(_:)``, no `client` |
+    /// | for this service's API, signed in through another service | ``AuthenticatedPrincipal/account(_:)``, with that `client` |
+    /// | for this service's API, another service's client credentials | ``AuthenticatedPrincipal/service(_:)`` |
+    ///
+    /// A token for another API, or any API when ``resourceIdentifier`` is `nil`,
+    /// is refused. So is this service's own client-credentials token: it's
+    /// nobody's to send.
+    public func authenticatePrincipal(accessToken: String) async throws -> PrincipalAuthentication {
+        guard !accessToken.isEmpty else { throw AuthenticationError.missingAccessToken() }
+        let introspection = try await introspect(accessToken)
+        guard introspection.active else {
+            let refreshed = try await refresh(accessToken)
+            return PrincipalAuthentication(principal: .account(refreshed.account), updated: refreshed.updated)
+        }
+
+        if let audience = introspection.audience {
+            guard let resourceIdentifier, audience == resourceIdentifier, let client = introspection.clientIdentifier else {
+                throw AuthenticationError.invalidAccessToken()
+            }
+            if let subject = introspection.subject {
+                return PrincipalAuthentication(principal: .account(AuthenticatedAccount(
+                    subject: subject, scopes: Set(introspection.scopes), accessToken: accessToken, client: client
+                )))
+            }
+            return PrincipalAuthentication(principal: .service(AuthenticatedService(
+                clientIdentifier: client, scopes: Set(introspection.scopes), accessToken: accessToken
+            )))
+        }
+
+        // This service's own client: a sign-in token, or (no subject) its own
+        // client-credentials token, which nobody should be sending it.
+        guard let subject = introspection.subject else { throw AuthenticationError.invalidAccessToken() }
+        return PrincipalAuthentication(principal: .account(AuthenticatedAccount(
+            subject: subject, scopes: Set(introspection.scopes), accessToken: accessToken
+        )))
     }
 
     /// Refreshes the session whose current token `accessToken` is.

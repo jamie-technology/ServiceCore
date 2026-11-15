@@ -301,6 +301,41 @@ Each request's token is checked with accounts' introspection endpoint. Options: 
 
 **Browsers, cross-origin:** list `X-Updated-Access-Token`, `X-Updated-Access-Token-Version` and `X-Authentication-Error` in the CORS configuration's exposed headers (`Access-Control-Expose-Headers`). Otherwise the browser hides them from the client.
 
+### Providing an API to other services (resource servers)
+
+A service other services call (Groups, say) registers an **API** at accounts (Services → the service → API): a
+resource identifier, its scopes, and an allow-list of the OAuth clients that may get tokens for it. Other services'
+clients then get tokens *for this service's API* (RFC 8707), and it accepts them once it knows its identifier:
+
+| Key | Environment | |
+|---|---|---|
+| `accounts.resource.identifier` | `ACCOUNTS_RESOURCE_IDENTIFIER` | the API's resource identifier, exactly as registered |
+
+There are then three kinds of caller, and `try req.principal` (an `AuthenticatedPrincipal`) says which:
+
+| Token | `req.principal` |
+|---|---|
+| from this service's own sign-in | `.account(…)`, `client == nil` |
+| a person signed in through another service, for this API | `.account(…)`, `client` = that service's client ID |
+| another service acting as itself (client credentials), for this API | `.service(…)` |
+
+`principal.subject` is `account:<id>` or `service:<client>`: one namespace, so a service is never mistaken for a
+person. A person acting through another service is still that person: apply *their* authority (narrowed by the
+token's scopes), and record `client` beside them in audit logs.
+
+Services acting as themselves only get in where a route says so:
+
+```swift
+@AuthMiddleware(AuthenticatedPrincipal.self, using: { (controller: GroupsController) in
+    AuthenticationMiddleware(service: controller.auth, requiredScopes: ["groups.read"], acceptsServices: true)
+})
+func list(req: Request, principal: AuthenticatedPrincipal) async throws -> Protobuf<Groups_V1_GroupList> { … }
+```
+
+Everywhere else, `AuthenticationMiddleware` and `authenticate(accessToken:)` behave as before: people only
+(`req.account` works for delegated people too). Tokens for any other API are refused, as is this service's own
+client-credentials token.
+
 ### Token refresh
 
 When introspection says a token is no longer active and it is its session's current token, the middleware refreshes the session and the request goes ahead as the new token. The response, error responses included, carries the new token in `X-Updated-Access-Token` and its version in `X-Updated-Access-Token-Version`.
