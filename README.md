@@ -76,25 +76,59 @@ try await records.withStore { store in
 
 A write transaction can run again **after its first run committed**: FoundationDB retries
 `commit_unknown_result` (and `cluster_version_changed`) without knowing whether the commit happened. Every
-write must give the right answer when that happens:
+write transaction must give the right answer when that happens.
+
+Unless a transaction is idempotent by nature, give it an **applied-request record**. That's a record type of
+the service's own, keyed by an ID made *before* the transaction. The transaction checks for it first and writes
+it along with its changes:
 
 ```swift
-let id = UUID().uuidString.lowercased()          // identifiers, tokens, timestamps: before the transaction
+let requestID = AppliedRequests.newID(sweeping: records)   // before the transaction
+let groupID = UUID().uuidString.lowercased()               // so is anything the response names
 try await records.withStore { store in
-    if let existing = try await store.load(Group.self, id: id) {
-        return Response(existing)                 // the earlier run committed: return what it would have
+    if try await AppliedRequests.applied(requestID, store: store) {
+        return groupID                    // the earlier run committed: answer as it would have, write nothing
     }
-    // ...validate, then insert the group keyed by `id`...
+    // ...authorise, validate, write...
+    try await AppliedRequests.record(requestID, store: store)
+    return groupID
 }
 ```
 
-- **Creating a record:** check for its pre-made key first.
-- **Changing a record:** stamp it with a request ID made before the transaction (`last_request_id`) and check
-  that before the version check.
-- **Deleting:** treat already gone as success.
+- **The check comes first,** before authorisation, version checks or anything else the earlier run's own writes
+  would now fail.
+- **It's always right.** Only this transaction ever writes that key, so the answer holds whatever other requests
+  did in between. That's why it's a record of its own rather than a field stamped on the changed record, which
+  another request could overwrite before the retry.
+- **The response is rebuilt from values made before the transaction**, or read back afterwards.
+- **IDs are time-ordered** (a hex millisecond prefix), so records older than the retry window can be swept as a
+  key prefix. Groups' and Accounts' `AppliedRequests` are the reference implementations.
+- **Secrets the request generated are their own marker.** A token, code or challenge made before the
+  transaction can't be referred to by anything else before the response hands it out, so finding it stored is
+  just as reliable a check.
 
-Test with `RecordDatabase.$retriesAfterCommit.withValue(true) { … }`: every transaction inside commits, then
-runs again. The full write-up, with each pattern, is "FoundationDB idempotent transactions" (shared separately).
+**Requests with several transactions.** The record covers one transaction, not the request:
+
+- **Each write transaction needs its own ID.** For example, the OAuth code exchange marks the code with one ID
+  in its first transaction, and issues the token under identifiers made up front in its second.
+- **The request as a whole isn't atomic.** If it fails between transactions, the ones already committed stay
+  committed, so design each step to be safe on its own. A client retrying the whole request is a new request
+  with new IDs, so that needs request-level idempotency, such as a generation compare-and-set.
+- **Steps outside FoundationDB aren't covered.** HTTP calls between transactions need their own idempotency.
+  AuthenticationCore's refresh, for example, sends `expected_generation` to Accounts, then records the result
+  with `SessionStore.replace`.
+- **AuthenticationCore's session store** is one transaction per call. Its compare-and-swap is idempotent:
+  finding the new session already stored counts as success. Sign-in, refresh and sign-out are several steps,
+  each safe alone. A failed sign-in leaves at most an unused code exchange, and the person signs in again.
+
+**Already idempotent, so no record needed:**
+- reads
+- writes that set values from the request
+- "if it's there, return it" before writing
+- compare-and-set on a generation that hands back what was already issued
+
+**Test** with `RecordDatabase.$retriesAfterCommit.withValue(true) { … }`: every transaction inside commits,
+then runs again. The full write-up is "FoundationDB idempotent transactions" (shared separately).
 
 ## BlobStore
 

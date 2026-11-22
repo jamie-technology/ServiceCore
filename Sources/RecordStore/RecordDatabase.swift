@@ -38,11 +38,12 @@ public struct RecordDatabase: Sendable {
     /// outside the transaction. And it may run again *after an earlier run
     /// committed*: FoundationDB retries `commit_unknown_result` (and
     /// `cluster_version_changed`) without knowing whether the commit happened.
-    /// So a write must be idempotent: make identifiers, tokens and timestamps
-    /// before calling this, and first check for something only this request
-    /// could have written (the record it creates, or a request ID it stamps
-    /// on what it changes). If it's there, return what the first run would
-    /// have. See the README's "Idempotent transactions".
+    /// So a write must be idempotent: make an ID (and anything the response
+    /// names) before calling this; first check for an applied-request record
+    /// under that ID, which only this transaction writes, and write it with
+    /// the changes. Found: the earlier run committed, so return what it would
+    /// have. One ID per write transaction: a request with several needs one
+    /// for each. See the README's "Idempotent transactions".
     ///
     /// Test that with ``retriesAfterCommit``.
     public func withStore<T: Sendable>(
