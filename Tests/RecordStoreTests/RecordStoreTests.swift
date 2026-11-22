@@ -4,6 +4,7 @@ import FoundationDB
 import FoundationDBCore
 import RecordStore
 import SwiftProtobuf
+import Synchronization
 import Testing
 
 /// Well-known types stand in for a service's records, so the tests need no
@@ -42,6 +43,24 @@ private func withDatabase(_ body: (RecordDatabase) async throws -> Void) async t
             }
             #expect(loaded?.record.value == "a")
             #expect(loaded?.version != nil)
+        }
+    }
+
+    @Test func retriesAfterCommitRunsATransactionTwice() async throws {
+        try await withDatabase { database in
+            let runs = Counter()
+            try await RecordDatabase.$retriesAfterCommit.withValue(true) {
+                try await database.withStore { store in
+                    runs.increment()
+                    // The second run sees the first's committed write.
+                    let existing = try await store.load(Google_Protobuf_StringValue.self, primaryKey: Tuple(["once"]))
+                    #expect((existing != nil) == (runs.value == 2))
+                    _ = try await store.save(Google_Protobuf_StringValue("once"))
+                }
+            }
+            #expect(runs.value == 2)
+            try await database.withStore { _ in runs.increment() }
+            #expect(runs.value == 3)
         }
     }
 
@@ -147,4 +166,10 @@ private func withDatabase(_ body: (RecordDatabase) async throws -> Void) async t
         #expect(Base64URL.decode("a") == nil)
         #expect(Base64URL.decode("ab+c") == nil)
     }
+}
+
+private final class Counter: Sendable {
+    private let count = Mutex(0)
+    var value: Int { count.withLock { $0 } }
+    func increment() { count.withLock { $0 += 1 } }
 }

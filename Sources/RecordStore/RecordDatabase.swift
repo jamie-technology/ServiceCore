@@ -32,11 +32,28 @@ public struct RecordDatabase: Sendable {
     }
 
     /// Runs `operation` against the record store in one transaction, which
-    /// commits if it returns and retries if FoundationDB reports a conflict.
+    /// commits if it returns and retries if FoundationDB says to.
     ///
     /// `operation` may run more than once, so it must not have side effects
-    /// outside the transaction.
+    /// outside the transaction. And it may run again *after an earlier run
+    /// committed*: FoundationDB retries `commit_unknown_result` (and
+    /// `cluster_version_changed`) without knowing whether the commit happened.
+    /// So a write must be idempotent: make identifiers, tokens and timestamps
+    /// before calling this, and first check for something only this request
+    /// could have written (the record it creates, or a request ID it stamps
+    /// on what it changes). If it's there, return what the first run would
+    /// have. See the README's "Idempotent transactions".
+    ///
+    /// Test that with ``retriesAfterCommit``.
     public func withStore<T: Sendable>(
+        _ operation: @Sendable (FDBRecordStore) async throws -> T
+    ) async throws -> T {
+        let result = try await run(operation)
+        guard Self.retriesAfterCommit else { return result }
+        return try await run(operation)
+    }
+
+    private func run<T: Sendable>(
         _ operation: @Sendable (FDBRecordStore) async throws -> T
     ) async throws -> T {
         let metaData = self.metaData, path = self.path
@@ -47,6 +64,21 @@ public struct RecordDatabase: Sendable {
             return try await operation(store)
         }
     }
+
+    /// For tests: while `true`, every ``withStore(_:)`` transaction commits and
+    /// then runs again in a new transaction, returning the second run's result.
+    /// That's what FoundationDB does when a commit reports
+    /// `commit_unknown_result` but did happen. Set it around a request to check
+    /// the request still does exactly what it should:
+    ///
+    /// ```swift
+    /// try await RecordDatabase.$retriesAfterCommit.withValue(true) {
+    ///     try await client.execute(request)
+    /// }
+    /// ```
+    ///
+    /// A task-local, so tests running in parallel don't see each other's.
+    @TaskLocal public static var retriesAfterCommit = false
 
     /// The same store layout at a different path, for keeping separate
     /// stores (per container, per test run) under one schema.

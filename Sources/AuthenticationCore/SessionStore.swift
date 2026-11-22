@@ -26,7 +26,9 @@ public protocol SessionStore: Sendable {
 
     /// Atomically: if the session stored under `id` is `expected` (`nil`: there
     /// is none, or only an expired one), replaces it with `new` (`nil`: deletes
-    /// it) and returns `true`. Otherwise changes nothing and returns `false`.
+    /// it) and returns `true`. If it's already `new`, also returns `true`: a
+    /// database transaction retried after its commit succeeded finds its own
+    /// write. Otherwise changes nothing and returns `false`.
     func replace(_ id: UUID, expected: SessionRecord?, with new: SessionRecord?) async throws -> Bool
 }
 
@@ -196,6 +198,7 @@ public final class InMemorySessionStore: SessionStore {
         let now = now()
         return sessions.withLock { sessions in
             let current = sessions[id].flatMap { $0.isExpired(at: now) ? nil : $0 }
+            guard current != new else { return true }
             guard current == expected else { return false }
             sessions[id] = new
             return true

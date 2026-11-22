@@ -72,6 +72,30 @@ try await records.withStore { store in
 - `FDBRecordVersion.base64URLEncoded` / `init?(base64URLEncoded:)` turn a version into the opaque token clients send back. `store.load(_:primaryKey:expecting:)` is the read half of optimistic concurrency.
 - `RecordStoreError.isConflict / isAlreadyExists / isNotFound` classify Record Layer failures.
 
+### Idempotent transactions
+
+A write transaction can run again **after its first run committed**: FoundationDB retries
+`commit_unknown_result` (and `cluster_version_changed`) without knowing whether the commit happened. Every
+write must give the right answer when that happens:
+
+```swift
+let id = UUID().uuidString.lowercased()          // identifiers, tokens, timestamps: before the transaction
+try await records.withStore { store in
+    if let existing = try await store.load(Group.self, id: id) {
+        return Response(existing)                 // the earlier run committed: return what it would have
+    }
+    // ...validate, then insert the group keyed by `id`...
+}
+```
+
+- **Creating a record:** check for its pre-made key first.
+- **Changing a record:** stamp it with a request ID made before the transaction (`last_request_id`) and check
+  that before the version check.
+- **Deleting:** treat already gone as success.
+
+Test with `RecordDatabase.$retriesAfterCommit.withValue(true) { … }`: every transaction inside commits, then
+runs again. The full write-up, with each pattern, is "FoundationDB idempotent transactions" (shared separately).
+
 ## BlobStore
 
 ```swift

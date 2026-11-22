@@ -56,7 +56,11 @@ public struct FoundationDBSessionStore: SessionStore {
     public func replace(_ id: UUID, expected: SessionRecord?, with new: SessionRecord?) async throws -> Bool {
         let now = now()
         return try await database.withStore { store in
-            guard try await Self.live(store, id: id, now: now) == expected else { return false }
+            let current = try await Self.live(store, id: id, now: now)
+            // Already `new`: this transaction's earlier run committed (`new` holds a fresh token digest, so only
+            // this swap writes it).
+            guard current != new else { return true }
+            guard current == expected else { return false }
             if let new {
                 _ = try await store.save(AuthDbSession(new))
             } else {

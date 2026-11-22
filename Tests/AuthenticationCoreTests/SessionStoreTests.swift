@@ -25,7 +25,8 @@ private func checkContract(_ store: some SessionStore, now: TestClock) async thr
     #expect(try await store.replace(id, expected: nil, with: first))
     #expect(try await store.session(id: id) == first)
     #expect(try await store.session(forToken: TokenDigest(token: "t0")) == first)
-    #expect(try await store.replace(id, expected: nil, with: first) == false)
+    // Already what was asked for: done (a retried transaction finds its own write).
+    #expect(try await store.replace(id, expected: nil, with: first))
 
     // Moving to a new token: only the current token finds the session.
     var second = first
@@ -34,7 +35,10 @@ private func checkContract(_ store: some SessionStore, now: TestClock) async thr
     #expect(try await store.replace(id, expected: first, with: second))
     #expect(try await store.session(forToken: TokenDigest(token: "t0")) == nil)
     #expect(try await store.session(forToken: TokenDigest(token: "t1")) == second)
-    #expect(try await store.replace(id, expected: first, with: first) == false)
+    #expect(try await store.replace(id, expected: first, with: second))
+    var third = second
+    third.tokenDigest = TokenDigest(token: "t2")
+    #expect(try await store.replace(id, expected: first, with: third) == false)
 
     // Other sessions are separate.
     let other = session(token: "other", expiresAt: start + 3600)
@@ -68,6 +72,21 @@ private func checkContract(_ store: some SessionStore, now: TestClock) async thr
             connection: connection, path: "auth-test-\(UUID().uuidString.prefix(8))", now: { now.now }
         )
         try await checkContract(store, now: now)
+
+        // Every swap is right even when its transaction runs again after committing.
+        try await RecordDatabase.$retriesAfterCommit.withValue(true) {
+            let retried = session(expiresAt: now.now + 3600)
+            let created = try await store.replace(retried.id, expected: nil, with: retried)
+            var moved = retried
+            moved.tokenDigest = TokenDigest(token: "moved")
+            let swapped = try await store.replace(retried.id, expected: retried, with: moved)
+            let ended = try await store.replace(retried.id, expected: moved, with: nil)
+            let after = try await store.session(id: retried.id)
+            #expect(created)
+            #expect(swapped)
+            #expect(ended)
+            #expect(after == nil)
+        }
 
         // Sweeping removes exactly the expired sessions.
         now.set(Date(timeIntervalSince1970: 2_000_000))
